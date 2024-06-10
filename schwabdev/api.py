@@ -10,7 +10,7 @@ from datetime import datetime
 
 class Client:
 
-    def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True):
+    def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, outfile=None):
         """
         Initialize a client to access the Schwab API.
         :param app_key: app key credentials
@@ -27,6 +27,7 @@ class Client:
         :type verbose: bool
         :param show_linked: print linked accounts
         :type show_linked: bool
+        :type outfile: file object
         """
 
         if app_key is None or app_secret is None or callback_url is None or tokens_file is None:
@@ -48,6 +49,7 @@ class Client:
         self.timeout = timeout
         self._verbose = verbose             # verbose mode
         self.stream = Stream(self)          # init the streaming object
+        if outfile: color_print.OutFile = outfile
 
         # Try to load tokens from the tokens file
         at_issued, rt_issued, token_dictionary = self._read_tokens_file()
