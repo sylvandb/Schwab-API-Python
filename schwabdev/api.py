@@ -10,7 +10,7 @@ from datetime import datetime
 
 class Client:
 
-    def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, outfile=None):
+    def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, webbrowser=False, outfile=None):
         """
         Initialize a client to access the Schwab API.
         :param app_key: app key credentials
@@ -27,6 +27,7 @@ class Client:
         :type verbose: bool
         :param show_linked: print linked accounts
         :type show_linked: bool
+        :type webbrowser: bool
         :type outfile: file object
         """
 
@@ -49,6 +50,7 @@ class Client:
         self.timeout = timeout
         self._verbose = verbose             # verbose mode
         self.stream = Stream(self)          # init the streaming object
+        self.webbrowser = webbrowser        # okay to open a webbrowser
         if outfile: color_print.OutFile = outfile
 
         # Try to load tokens from the tokens file
@@ -144,13 +146,14 @@ class Client:
         """
         Get new access and refresh tokens using authorization code.
         """
-        import webbrowser
         # get authorization code (requires user to authorize)
         color_print.user("Please authorize this program to access your schwab account.")
         auth_url = f'https://api.schwabapi.com/v1/oauth/authorize?client_id={self._app_key}&redirect_uri={self._callback_url}'
         color_print.user(f"Click to authenticate: {auth_url}")
-        color_print.user("Opening browser...")
-        webbrowser.open(auth_url)
+        if self.webbrowser:
+            import webbrowser
+            color_print.user("Opening browser...")
+            webbrowser.open(auth_url)
         response_url = color_print.user_input(
             "After authorizing, wait for it to load (<1min) and paste the WHOLE url here: ")
         code = f"{response_url[response_url.index('code=') + 5:response_url.index('%40')]}@"  # session = responseURL[responseURL.index("session=")+8:]
