@@ -269,7 +269,7 @@ class Client:
         """
         if l is None:
             return None
-        elif type(l) is list:
+        elif isinstance(l, (list, tuple, set)):
             return ",".join(l)
         else:
             return l
