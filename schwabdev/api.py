@@ -2,6 +2,7 @@ import json
 import base64
 import requests
 import threading
+import time
 import urllib.parse
 from . import color_print
 from .stream import Stream
@@ -64,9 +65,9 @@ class Client:
             self._refresh_token_issued = rt_issued
             if self._verbose:
                 color_print.info(self._access_token_issued.strftime(
-                    "Access token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self._access_token_timeout - (datetime.now() - self._access_token_issued).seconds} seconds)")
+                    "Access token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self.access_token_expires)} seconds)")
                 color_print.info(self._refresh_token_issued.strftime(
-                    "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self._refresh_token_timeout - (datetime.now() - self._refresh_token_issued).days} days)")
+                    "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self.refresh_token_expires/86400:0.2f} days)")
             # check if tokens need to be updated and update if needed
             self.update_tokens()
         else:
@@ -91,15 +92,35 @@ class Client:
         if self._verbose:
             color_print.info("Initialization Complete")
 
+    @property
+    def access_token_expires(self):
+        # return seconds until expiration
+        return self._token_expires(self._access_token_timeout, self._access_token_issued)
+
+    @property
+    def refresh_token_expires(self):
+        # return seconds until expiration
+        return self._token_expires(self._refresh_token_timeout * 86400, self._refresh_token_issued)
+
+    def _token_expires(self, duration, issued):
+        # return seconds until expiration
+        return duration - self._token_age(issued)
+
+    def _token_age(self, issued):
+        # return age in seconds
+        return (datetime.now() - issued).total_seconds()
+
     def update_tokens(self):
         """
         Checks if tokens need to be updated and updates if needed (only access token is automatically updated)
         """
-        if (datetime.now() - self._refresh_token_issued).days >= (self._refresh_token_timeout - 1):  # check if we need to update refresh (and access) token
+        # check if we need to update refresh (and access) token - if less than 1s before expiration
+        rte = self.refresh_token_expires
+        if rte < 1:
             for i in range(3):  color_print.user("The refresh token has expired, please update!")
             self._update_refresh_token()
-        elif ((datetime.now() - self._access_token_issued).days >= 1) or (
-                (datetime.now() - self._access_token_issued).seconds > (self._access_token_timeout - 61)):  # check if we need to update access token
+        # check if we need to update access (and refresh?) token - if less than 60s before expiration
+        elif rte < 60 or self.access_token_expires < 60:
             if self._verbose:
                 color_print.info("The access token has expired, updating automatically.")
             self._update_access_token()
@@ -110,9 +131,11 @@ class Client:
         Spawns a thread to check the access token and update if necessary
         """
         def checker():
-            import time
             while True:
-                self.update_tokens()
+                try:
+                    self.update_tokens()
+                except Exception as e:
+                    color_print.error(f"Error during update_tokens: {e}")
                 time.sleep(60)
 
         threading.Thread(target=checker, daemon=True).start()
@@ -132,15 +155,22 @@ class Client:
                 self._refresh_token_issued = refresh_token_issued
                 new_td = response.json()
                 self.access_token = new_td.get("access_token")
-                self.refresh_token = new_td.get("refresh_token")
                 self.id_token = new_td.get("id_token")
-                self._write_tokens_file(self._access_token_issued, refresh_token_issued, new_td)
+                refresh_token = new_td.get("refresh_token")
+                if refresh_token and refresh_token != self.refresh_token:
+                    self.refresh_token = refresh_token
+                    self._refresh_token_issued = self._access_token_issued
+                    color_print.info(f"Refresh token updated: {self._refresh_token_issued}")
+                self._write_tokens_file(self._access_token_issued, self._refresh_token_issued, new_td)
+                # update the timeout in case schwab decides to change it
+                self._access_token_timeout = new_td.get("expires_in", self._access_token_timeout)
                 # show user that we have updated the access token
                 if self._verbose:
-                    color_print.info(f"Access token updated: {self._access_token_issued}")
+                    color_print.info(f"Access token updated: {self._access_token_issued} for {self._access_token_timeout} seconds")
                 break
             else:
                 color_print.error(f"Could not get new access token ({i+1} of 3).")
+                time.sleep(i ** 2)
 
     def _update_refresh_token(self):
         """
