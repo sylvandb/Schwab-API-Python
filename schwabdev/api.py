@@ -9,6 +9,9 @@ from .stream import Stream
 from datetime import datetime
 
 
+class UpdateError(Exception): pass
+
+
 class Client:
 
     def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, webbrowser=False, outfile=None):
@@ -171,6 +174,8 @@ class Client:
             else:
                 color_print.error(f"Could not get new access token ({i+1} of 3).")
                 time.sleep(i ** 2)
+        else:
+            raise UpdateError("Could not get new access token.")
 
     def _update_refresh_token(self):
         """
@@ -202,6 +207,9 @@ class Client:
             color_print.error("Could not get new refresh and access tokens, check these:\n    1. App status is "
                               "\"Ready For Use\".\n    2. App key and app secret are valid.\n    3. You pasted the "
                               "whole url within 30 seconds. (it has a quick expiration)")
+            raise UpdateError("Could not acquire refresh token.")
+
+    force_update_tokens = _update_refresh_token
 
     def _post_oauth_token(self, grant_type, code):
         """
