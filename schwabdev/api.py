@@ -1,6 +1,7 @@
 import json
 import base64
 import requests
+from sys import stdin
 import threading
 import time
 import urllib.parse
@@ -181,6 +182,10 @@ class Client:
         """
         Get new access and refresh tokens using authorization code.
         """
+        if not self.webbrowser and not stdin.isatty():
+            msg="Unable to update refresh token: no webbrowser and not a tty!"
+            color_print.error(msg)
+            raise UpdateError(msg)
         # get authorization code (requires user to authorize)
         color_print.user("Please authorize this program to access your schwab account.")
         auth_url = f'https://api.schwabapi.com/v1/oauth/authorize?client_id={self._app_key}&redirect_uri={self._callback_url}'
