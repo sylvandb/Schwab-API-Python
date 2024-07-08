@@ -47,10 +47,12 @@ class Client:
         self.access_token = None
         self.refresh_token = None
         self.id_token = None
+        self._token_thread = None
+        self._token_usable = 60             # minimum seconds to consider token usable
+        self._refresh_token_timeout = 7     # in days (from schwab)
+        self._access_token_timeout = 1800   # in seconds (from schwab)
         self._access_token_issued = None    # datetime of access token issue
         self._refresh_token_issued = None   # datetime of refresh token issue
-        self._access_token_timeout = 1800   # in seconds (from schwab)
-        self._refresh_token_timeout = 7     # in days (from schwab)
         self._tokens_file = tokens_file     # path to tokens file
         self.timeout = timeout
         self._verbose = verbose             # verbose mode
@@ -72,39 +74,47 @@ class Client:
                     "Access token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self.access_token_expires)} seconds)")
                 color_print.info(self._refresh_token_issued.strftime(
                     "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self.refresh_token_expires/86400:0.2f} days)")
-            # check if tokens need to be updated and update if needed
-            self.update_tokens()
         else:
             # The tokens file doesn't exist, so create it.
-            color_print.warning(f"Token file does not exist or invalid formatting, creating \"{str(tokens_file)}\"")
+            color_print.warning(f"Token file does not exist or invalid formatting, creating \"{str(self._tokens_file)}\"")
             open(self._tokens_file, 'w').close()
-            # Tokens must be updated.
-            self._update_refresh_token()
 
-        # get account numbers & hashes, this doubles as a checker to make sure that the appKey and appSecret are valid and that the app is ready for use
-        if show_linked and self._verbose:
-            resp = self.account_linked()
-            if resp.ok:
-                d = resp.json()
-                color_print.info(f"Linked Accounts: {d}")
-            else:  # app might not be "Ready For Use"
-                color_print.error("Could not get linked accounts.")
-                color_print.error("Please make sure that your app status is \"Ready For Use\" and that the app key and app secret are valid.")
-                color_print.error(resp.json())
-            resp.close()
+        if self.refresh_token_expires > 0 and show_linked and self._verbose:
+            self.update_tokens_auto()
+            self._show_account_linked()
 
         if self._verbose:
             color_print.info("Initialization Complete")
 
+
+    def _show_account_linked(self):
+        # get account numbers & hashes, this doubles as a checker to make sure that the appKey and appSecret are valid and that the app is ready for use
+        resp = self.account_linked()
+        if resp.ok:
+            d = resp.json()
+            color_print.info(f"Linked Accounts: {d}")
+        else:  # app might not be "Ready For Use"
+            color_print.error("Could not get linked accounts.")
+            color_print.error("Please make sure that your app status is \"Ready For Use\" and that the app key and app secret are valid.")
+            color_print.error(resp.json())
+        resp.close()
+
+
     @property
     def access_token_expires(self):
         # return seconds until expiration
-        return self._token_expires(self._access_token_timeout, self._access_token_issued)
+        try:
+            return self._token_expires(self._access_token_timeout, self._access_token_issued)
+        except TypeError:
+            return 0
 
     @property
     def refresh_token_expires(self):
         # return seconds until expiration
-        return self._token_expires(self._refresh_token_timeout * 86400, self._refresh_token_issued)
+        try:
+            return self._token_expires(self._refresh_token_timeout * 86400, self._refresh_token_issued)
+        except TypeError:
+            return 0
 
     def _token_expires(self, duration, issued):
         # return seconds until expiration
@@ -124,7 +134,7 @@ class Client:
             for i in range(3):  color_print.user("The refresh token has expired, please update!")
             self._update_refresh_token()
         # check if we need to update access (and refresh?) token - if less than 60s before expiration
-        elif rte < 60 or self.access_token_expires < 60:
+        elif rte < self._token_usable or self.access_token_expires < self._token_usable:
             if self._verbose:
                 color_print.info("The access token has expired, updating automatically.")
             self._update_access_token()
@@ -134,15 +144,21 @@ class Client:
         """
         Spawns a thread to check the access token and update if necessary
         """
+        if self._token_thread:
+            return
+        first = threading.Event()
+        first.clear()
         def checker():
-            while True:
+            while self._token_thread:
                 try:
                     self.update_tokens()
                 except Exception as e:
                     color_print.error(f"Error during update_tokens: {e}")
-                time.sleep(60)
-
-        threading.Thread(target=checker, daemon=True).start()
+                first.set()
+                time.sleep(self._token_usable)
+        self._token_thread = threading.Thread(target=checker, daemon=True)
+        self._token_thread.start()
+        first.wait()
 
     def _update_access_token(self):
         """
