@@ -15,7 +15,7 @@ class UpdateError(Exception): pass
 
 class Client:
 
-    def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, webbrowser=False, outfile=None):
+    def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, webbrowser=False, auto_refresh=True, outfile=None):
         """
         Initialize a client to access the Schwab API.
         :param app_key: app key credentials
@@ -53,6 +53,7 @@ class Client:
         self._access_token_timeout = 1800   # in seconds (from schwab)
         self._access_token_issued = None    # datetime of access token issue
         self._refresh_token_issued = None   # datetime of refresh token issue
+        self._auto_refresh = auto_refresh   # automatically attempt to acquire a refresh token
         self._tokens_file = tokens_file     # path to tokens file
         self.timeout = timeout
         self._verbose = verbose             # verbose mode
@@ -79,7 +80,7 @@ class Client:
             color_print.warning(f"Token file does not exist or invalid formatting, creating \"{str(self._tokens_file)}\"")
             open(self._tokens_file, 'w').close()
 
-        if self.refresh_token_expires > 0 and show_linked and self._verbose:
+        if (self._auto_refresh or self.refresh_token_expires > 0) and show_linked and self._verbose:
             self.update_tokens_auto()
             self._show_account_linked()
 
@@ -130,7 +131,7 @@ class Client:
         """
         # check if we need to update refresh (and access) token - if less than 1s before expiration
         rte = self.refresh_token_expires
-        if rte < 1:
+        if self._auto_refresh and rte < 1:
             for i in range(3):  color_print.user("The refresh token has expired, please update!")
             self._update_refresh_token()
         # check if we need to update access (and refresh?) token - if less than 60s before expiration
