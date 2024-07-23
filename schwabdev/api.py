@@ -10,13 +10,15 @@ from .stream import Stream
 from datetime import datetime
 
 
-class UpdateError(Exception): pass
+
+class TokenUpdateError(Exception): pass
+
 
 
 class Token:
 
-    def __init__(self, timeout):
-        self.timeout = timeout
+    def __init__(self, lifetime):
+        self.lifetime = lifetime
         self.issued = None
         self._token = None
 
@@ -31,30 +33,25 @@ class Token:
 
     @property
     def expires(self):
-        # return seconds until expiration, timeout - age
+        # return seconds until expiration, lifetime - age
         try:
-            return self.timeout - (datetime.now() - self.issued).total_seconds()
+            return self.lifetime - (datetime.now() - self.issued).total_seconds()
         except TypeError:
             return 0
 
 
-#class Tokens:
-    #access_token
-    #refresh_token
-    #id_token
-    #update_access
-    #obtain_refresh
-    #thread
-    #auto_update
-    #read_file
-    #write_file
 
+class Tokens:
 
-class Client:
-
-    def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, webbrowser=False, auto_refresh=True, outfile=None):
+    def __init__(self,
+        app_key, app_secret,
+        callback_url="https://127.0.0.1",
+        tokens_file="tokens.json",
+        verbose=True,
+        webbrowser=False,
+        auto_refresh=True):
         """
-        Initialize a client to access the Schwab API.
+        Token management for the Schwab API.
         :param app_key: app key credentials
         :type app_key: str
         :param app_secret: app secret credentials
@@ -63,70 +60,47 @@ class Client:
         :type callback_url: str
         :param tokens_file: path to tokens file
         :type tokens_file: str
-        :param timeout: request timeout
-        :type timeout: int
         :param verbose: print extra information
         :type verbose: bool
-        :param show_linked: print linked accounts
-        :type show_linked: bool
+        :param webbrowser: okay to launch webbrowser
         :type webbrowser: bool
-        :type outfile: file object
+        :param auto_refresh: automatically acquire the refresh token
+        :type auto_refresh: bool
         """
 
-        if app_key is None or app_secret is None or callback_url is None or tokens_file is None:
-            raise Exception("app_key, app_secret, callback_url, and tokens_file cannot be None.")
+        if callback_url is None or tokens_file is None:
+            raise Exception("callback_url and tokens_file cannot be None.")
         elif len(app_key) != 32 or len(app_secret) != 16:
-            raise Exception("App key or app secret invalid length.")
+            raise Exception(f"Invalid length App key({len(app_key)}) or app secret({len(app_secret)}).")
 
         self._app_key = app_key
         self._app_secret = app_secret
         self._callback_url = callback_url
         self._access_token = Token(1800)       # in seconds (from schwab)
         self._refresh_token = Token(7 * 86400) # days (from schwab) to seconds
-        self.id_token = None
         self._token_thread = None
         self._token_usable = 60             # minimum seconds to consider token usable
         self._auto_refresh = auto_refresh   # automatically attempt to acquire a refresh token
         self._tokens_file = tokens_file     # path to tokens file
-        self.timeout = timeout
         self._verbose = verbose             # verbose mode
-        self.stream = Stream(self)          # init the streaming object
-        self.webbrowser = webbrowser        # okay to open a webbrowser
-        if outfile: color_print.OutFile = outfile
+        self._webbrowser = webbrowser       # okay to open a webbrowser
 
-        # Try to load tokens from the tokens file
-        token_dictionary = self._read_tokens_file()
-        if token_dictionary is not None:
+        self.id_token = None
+
+        try:
+            self._read_tokens_file()
+        except:
+            # The tokens file doesn't exist, so create it.
+            color_print.warning(f"Token file does not exist or invalid formatting, creating \"{str(self._tokens_file)}\"")
+            open(self._tokens_file, 'w').close()
+        else:
             # show user when tokens were last updated and when they will expire
             if self._verbose:
                 color_print.info(self._access_token.issued.strftime(
                     "Access token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self._access_token.expires)} seconds)")
                 color_print.info(self._refresh_token.issued.strftime(
                     "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self._refresh_token.expires/86400:0.2f} days)")
-        else:
-            # The tokens file doesn't exist, so create it.
-            color_print.warning(f"Token file does not exist or invalid formatting, creating \"{str(self._tokens_file)}\"")
-            open(self._tokens_file, 'w').close()
 
-        if (self._auto_refresh or self._refresh_token.expires > 0) and show_linked and self._verbose:
-            self.update_tokens_auto()
-            self._show_account_linked()
-
-        if self._verbose:
-            color_print.info("Initialization Complete")
-
-
-    def _show_account_linked(self):
-        # get account numbers & hashes, this doubles as a checker to make sure that the appKey and appSecret are valid and that the app is ready for use
-        resp = self.account_linked()
-        if resp.ok:
-            d = resp.json()
-            color_print.info(f"Linked Accounts: {d}")
-        else:  # app might not be "Ready For Use"
-            color_print.error("Could not get linked accounts.")
-            color_print.error("Please make sure that your app status is \"Ready For Use\" and that the app key and app secret are valid.")
-            color_print.error(resp.json())
-        resp.close()
 
     @property
     def access_token(self):
@@ -136,21 +110,6 @@ class Client:
     def token_expires(self):
         return self._refresh_token.expires
 
-    def update_tokens(self):
-        """
-        Checks if tokens need to be updated and updates if needed (only access token is automatically updated)
-        """
-        # check if we need to update refresh (and access) token - if less than 1s before expiration
-        rte = self._refresh_token.expires
-        if self._auto_refresh and rte < 1:
-            for i in range(3):  color_print.user("The refresh token has expired, please update!")
-            self._update_refresh_token()
-        # check if we need to update access (and refresh?) token - if less than 60s before expiration
-        elif rte < self._token_usable or self._access_token.expires < self._token_usable:
-            if self._verbose:
-                color_print.info("The access token has expired, updating automatically.")
-            self._update_access_token()
-        # else: color_print.info("Token check passed")
 
     def update_tokens_auto(self):
         """
@@ -172,48 +131,37 @@ class Client:
         self._token_thread.start()
         first.wait()
 
-    def _update_access_token(self):
-        """
-        "refresh" the access token using the refresh token
-        """
-        # get new tokens
-        for i in range(3):
-            response = self._post_oauth_token('refresh_token', self._refresh_token.token)
-            if response.ok:
-                # get and update to the new access token
-                new_td = response.json()
-                self.id_token = new_td.get("id_token")
-                self._access_token.token = new_td.get("access_token")
-                refresh_token = new_td.get("refresh_token")
-                if refresh_token and refresh_token != self._refresh_token.token:
-                    self._refresh_token.token = refresh_token
-                    color_print.info(f"Refresh token updated: {self._refresh_token.issued}")
-                self._write_tokens_file(new_td)
-                # update the timeout in case schwab decides to change it
-                self._access_token.timeout = new_td.get("expires_in", self._access_token.timeout)
-                # show user that we have updated the access token
-                if self._verbose:
-                    color_print.info(f"Access token updated: {self._access_token.issued} for {self._access_token.timeout} seconds")
-                break
-            else:
-                color_print.error(f"Could not get new access token ({i+1} of 3).")
-                time.sleep(i ** 2)
-        else:
-            raise UpdateError("Could not get new access token.")
 
-    def _update_refresh_token(self):
+    def update_tokens(self):
+        """
+        Checks if tokens need to be updated and updates if needed (only access token is automatically updated)
+        """
+        # check if we need to update refresh (and access) token - if less than 1s before expiration
+        rte = self._refresh_token.expires
+        if self._auto_refresh and rte < 1:
+            for i in range(3):  color_print.user("The refresh token has expired, please update!")
+            self.acquire_refresh_token()
+        # check if we need to update access (and refresh?) token - if less than 60s before expiration
+        elif rte < self._token_usable or self._access_token.expires < self._token_usable:
+            if self._verbose:
+                color_print.info("The access token has expired, updating automatically.")
+            self._update_access_token()
+        # else: color_print.info("Token check passed")
+
+
+    def acquire_refresh_token(self):
         """
         Get new access and refresh tokens using authorization code.
         """
-        if not self.webbrowser and not stdin.isatty():
+        if not self._webbrowser and not stdin.isatty():
             msg="Unable to update refresh token: no webbrowser and not a tty!"
             color_print.error(msg)
-            raise UpdateError(msg)
+            raise TokenUpdateError(msg)
         # get authorization code (requires user to authorize)
         color_print.user("Please authorize this program to access your schwab account.")
         auth_url = f'https://api.schwabapi.com/v1/oauth/authorize?client_id={self._app_key}&redirect_uri={self._callback_url}'
         color_print.user(f"Click to authenticate: {auth_url}")
-        if self.webbrowser:
+        if self._webbrowser:
             import webbrowser
             color_print.user("Opening browser...")
             webbrowser.open(auth_url)
@@ -234,9 +182,38 @@ class Client:
             color_print.error("Could not get new refresh and access tokens, check these:\n    1. App status is "
                               "\"Ready For Use\".\n    2. App key and app secret are valid.\n    3. You pasted the "
                               "whole url within 30 seconds. (it has a quick expiration)")
-            raise UpdateError("Could not acquire refresh token.")
+            raise TokenUpdateError("Could not acquire refresh token.")
 
-    force_update_tokens = _update_refresh_token
+
+    def _update_access_token(self):
+        """
+        "refresh" the access token using the refresh token
+        """
+        # get new tokens
+        for i in range(3):
+            response = self._post_oauth_token('refresh_token', self._refresh_token.token)
+            if response.ok:
+                # get and update to the new access token
+                new_td = response.json()
+                self.id_token = new_td.get("id_token")
+                self._access_token.token = new_td.get("access_token")
+                refresh_token = new_td.get("refresh_token")
+                if refresh_token and refresh_token != self._refresh_token.token:
+                    self._refresh_token.token = refresh_token
+                    color_print.info(f"Refresh token updated: {self._refresh_token.issued}")
+                self._write_tokens_file(new_td)
+                # update the lifetime in case schwab decides to change it
+                self._access_token.lifetime = new_td.get("expires_in", self._access_token.lifetime)
+                # show user that we have updated the access token
+                if self._verbose:
+                    color_print.info(f"Access token updated: {self._access_token.issued} for {self._access_token.lifetime} seconds")
+                break
+            else:
+                color_print.error(f"Could not get new access token ({i+1} of 3).")
+                time.sleep(i ** 2)
+        else:
+            raise TokenUpdateError("Could not get new access token.")
+
 
     def _post_oauth_token(self, grant_type, code):
         """
@@ -255,6 +232,7 @@ class Client:
             return None
         return requests.post('https://api.schwabapi.com/v1/oauth/token', headers=headers, data=data)
 
+
     def _write_tokens_file(self, tokenDictionary):
         """
         Writes token file
@@ -271,30 +249,88 @@ class Client:
                 f.flush()
         except Exception as e:
             color_print.error(e)
+            # continue on as normal
 
 
     def _read_tokens_file(self):
         """
         Reads token file
-        :return: token dictionary
-        :rtype: dict
         """
         try:
             with open(self._tokens_file, 'r') as f:
                 d = json.load(f)
             token_dictionary = d.get("token_dictionary")
-            # update the timeout in case schwab decides to change it
-            self._access_token.timeout = token_dictionary.get("expires_in", self._access_token.timeout)
+            # update the lifetime in case schwab decides to change it
+            self._access_token.lifetime = token_dictionary.get("expires_in", self._access_token.lifetime)
             self._access_token.token = token_dictionary.get("access_token")
             self._access_token.issued = datetime.fromisoformat(d.get("access_token_issued"))
-            # any way we can tell a new refresh token timeout?
+            # any way we can tell a new refresh token lifetime?
             self._refresh_token.token = token_dictionary.get("refresh_token")
             self._refresh_token.issued = datetime.fromisoformat(d.get("refresh_token_issued"))
             self.id_token = token_dictionary.get("id_token")
-            return token_dictionary
         except Exception as e:
             color_print.error(e)
-            return None
+            raise
+
+
+
+class Client:
+
+    def __init__(self, *a, timeout=5, verbose=True, show_linked=True, outfile=None, auto_refresh=True, **ka):
+        """
+        Initialize a client to access the Schwab API.
+        :param timeout: request timeout
+        :type timeout: int
+        :param verbose: print extra information
+        :type verbose: bool
+        :param show_linked: print linked accounts
+        :type show_linked: bool
+        :param outfile: redirect output
+        :type outfile: file object
+        """
+
+        if outfile: color_print.OutFile = outfile
+        self._verbose = verbose             # verbose mode
+        self.stream = Stream(self)          # init the streaming object
+        self.timeout = timeout
+        self._tokens = Tokens(*a, auto_refresh=auto_refresh, **ka)
+
+        # reflect some methods of Tokens class
+        self.update_tokens = self._tokens.update_tokens
+        self.update_tokens_auto = self._tokens.update_tokens_auto
+        self.update_tokens_force = self._tokens.acquire_refresh_token
+
+        if (auto_refresh or self.token_expires > 0) and show_linked and self._verbose:
+            self.update_tokens_auto()
+            self._show_accounts_linked()
+
+        if self._verbose:
+            color_print.info("Initialization Complete")
+
+    def _show_accounts_linked(self):
+        # get account numbers & hashes, this doubles as a checker to make sure that the appKey and appSecret are valid and that the app is ready for use
+        resp = self.account_linked()
+        if resp.ok:
+            d = resp.json()
+            color_print.info(f"Linked Accounts: {d}")
+        else:  # app might not be "Ready For Use"
+            color_print.error("Could not get linked accounts.")
+            color_print.error("Please make sure that your app status is \"Ready For Use\" and that the app key and app secret are valid.")
+            color_print.error(resp.json())
+        resp.close()
+
+    @property
+    def id_token(self):
+        return self._tokens.id_token
+
+    @property
+    def access_token(self):
+        return self._tokens.access_token
+
+    @property
+    def token_expires(self):
+        return self._tokens.token_expires
+
 
     def _params_parser(self, params):
         """
