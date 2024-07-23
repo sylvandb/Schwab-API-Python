@@ -13,6 +13,43 @@ from datetime import datetime
 class UpdateError(Exception): pass
 
 
+class Token:
+
+    def __init__(self, timeout):
+        self.timeout = timeout
+        self.issued = None
+        self._token = None
+
+    @property
+    def token(self):
+        return self._token
+
+    @token.setter
+    def token(self, value):
+        self.issued = datetime.now()
+        self._token = value
+
+    @property
+    def expires(self):
+        # return seconds until expiration, timeout - age
+        try:
+            return self.timeout - (datetime.now() - self.issued).total_seconds()
+        except TypeError:
+            return 0
+
+
+#class Tokens:
+    #access_token
+    #refresh_token
+    #id_token
+    #update_access
+    #obtain_refresh
+    #thread
+    #auto_update
+    #read_file
+    #write_file
+
+
 class Client:
 
     def __init__(self, app_key, app_secret, callback_url="https://127.0.0.1", tokens_file="tokens.json", timeout=5, verbose=True, show_linked=True, webbrowser=False, auto_refresh=True, outfile=None):
@@ -44,15 +81,11 @@ class Client:
         self._app_key = app_key
         self._app_secret = app_secret
         self._callback_url = callback_url
-        self.access_token = None
-        self.refresh_token = None
+        self._access_token = Token(1800)       # in seconds (from schwab)
+        self._refresh_token = Token(7 * 86400) # days (from schwab) to seconds
         self.id_token = None
         self._token_thread = None
         self._token_usable = 60             # minimum seconds to consider token usable
-        self._refresh_token_timeout = 7     # in days (from schwab)
-        self._access_token_timeout = 1800   # in seconds (from schwab)
-        self._access_token_issued = None    # datetime of access token issue
-        self._refresh_token_issued = None   # datetime of refresh token issue
         self._auto_refresh = auto_refresh   # automatically attempt to acquire a refresh token
         self._tokens_file = tokens_file     # path to tokens file
         self.timeout = timeout
@@ -62,25 +95,20 @@ class Client:
         if outfile: color_print.OutFile = outfile
 
         # Try to load tokens from the tokens file
-        at_issued, rt_issued, token_dictionary = self._read_tokens_file()
-        if None not in [at_issued, rt_issued, token_dictionary]:
+        token_dictionary = self._read_tokens_file()
+        if token_dictionary is not None:
             # show user when tokens were last updated and when they will expire
-            self.access_token = token_dictionary.get("access_token")
-            self.refresh_token = token_dictionary.get("refresh_token")
-            self.id_token = token_dictionary.get("id_token")
-            self._access_token_issued = at_issued
-            self._refresh_token_issued = rt_issued
             if self._verbose:
-                color_print.info(self._access_token_issued.strftime(
-                    "Access token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self.access_token_expires)} seconds)")
-                color_print.info(self._refresh_token_issued.strftime(
-                    "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self.refresh_token_expires/86400:0.2f} days)")
+                color_print.info(self._access_token.issued.strftime(
+                    "Access token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self._access_token.expires)} seconds)")
+                color_print.info(self._refresh_token.issued.strftime(
+                    "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self._refresh_token.expires/86400:0.2f} days)")
         else:
             # The tokens file doesn't exist, so create it.
             color_print.warning(f"Token file does not exist or invalid formatting, creating \"{str(self._tokens_file)}\"")
             open(self._tokens_file, 'w').close()
 
-        if (self._auto_refresh or self.refresh_token_expires > 0) and show_linked and self._verbose:
+        if (self._auto_refresh or self._refresh_token.expires > 0) and show_linked and self._verbose:
             self.update_tokens_auto()
             self._show_account_linked()
 
@@ -100,42 +128,25 @@ class Client:
             color_print.error(resp.json())
         resp.close()
 
+    @property
+    def access_token(self):
+        return self._access_token.token
 
     @property
-    def access_token_expires(self):
-        # return seconds until expiration
-        try:
-            return self._token_expires(self._access_token_timeout, self._access_token_issued)
-        except TypeError:
-            return 0
-
-    @property
-    def refresh_token_expires(self):
-        # return seconds until expiration
-        try:
-            return self._token_expires(self._refresh_token_timeout * 86400, self._refresh_token_issued)
-        except TypeError:
-            return 0
-
-    def _token_expires(self, duration, issued):
-        # return seconds until expiration
-        return duration - self._token_age(issued)
-
-    def _token_age(self, issued):
-        # return age in seconds
-        return (datetime.now() - issued).total_seconds()
+    def token_expires(self):
+        return self._refresh_token.expires
 
     def update_tokens(self):
         """
         Checks if tokens need to be updated and updates if needed (only access token is automatically updated)
         """
         # check if we need to update refresh (and access) token - if less than 1s before expiration
-        rte = self.refresh_token_expires
+        rte = self._refresh_token.expires
         if self._auto_refresh and rte < 1:
             for i in range(3):  color_print.user("The refresh token has expired, please update!")
             self._update_refresh_token()
         # check if we need to update access (and refresh?) token - if less than 60s before expiration
-        elif rte < self._token_usable or self.access_token_expires < self._token_usable:
+        elif rte < self._token_usable or self._access_token.expires < self._token_usable:
             if self._verbose:
                 color_print.info("The access token has expired, updating automatically.")
             self._update_access_token()
@@ -165,29 +176,24 @@ class Client:
         """
         "refresh" the access token using the refresh token
         """
-        # get the token dictionary (we will need to rewrite the file)
-        access_token_time_old, refresh_token_issued, token_dictionary_old = self._read_tokens_file()
         # get new tokens
         for i in range(3):
-            response = self._post_oauth_token('refresh_token', token_dictionary_old.get("refresh_token"))
+            response = self._post_oauth_token('refresh_token', self._refresh_token.token)
             if response.ok:
                 # get and update to the new access token
-                self._access_token_issued = datetime.now()
-                self._refresh_token_issued = refresh_token_issued
                 new_td = response.json()
-                self.access_token = new_td.get("access_token")
                 self.id_token = new_td.get("id_token")
+                self._access_token.token = new_td.get("access_token")
                 refresh_token = new_td.get("refresh_token")
-                if refresh_token and refresh_token != self.refresh_token:
-                    self.refresh_token = refresh_token
-                    self._refresh_token_issued = self._access_token_issued
-                    color_print.info(f"Refresh token updated: {self._refresh_token_issued}")
-                self._write_tokens_file(self._access_token_issued, self._refresh_token_issued, new_td)
+                if refresh_token and refresh_token != self._refresh_token.token:
+                    self._refresh_token.token = refresh_token
+                    color_print.info(f"Refresh token updated: {self._refresh_token.issued}")
+                self._write_tokens_file(new_td)
                 # update the timeout in case schwab decides to change it
-                self._access_token_timeout = new_td.get("expires_in", self._access_token_timeout)
+                self._access_token.timeout = new_td.get("expires_in", self._access_token.timeout)
                 # show user that we have updated the access token
                 if self._verbose:
-                    color_print.info(f"Access token updated: {self._access_token_issued} for {self._access_token_timeout} seconds")
+                    color_print.info(f"Access token updated: {self._access_token.issued} for {self._access_token.timeout} seconds")
                 break
             else:
                 color_print.error(f"Could not get new access token ({i+1} of 3).")
@@ -218,12 +224,11 @@ class Client:
         response = self._post_oauth_token('authorization_code', code)
         if response.ok:
             # update token file and variables
-            self._access_token_issued = self._refresh_token_issued = datetime.now()
             new_td = response.json()
-            self.access_token = new_td.get("access_token")
-            self.refresh_token = new_td.get("refresh_token")
             self.id_token = new_td.get("id_token")
-            self._write_tokens_file(self._access_token_issued, self._refresh_token_issued, new_td)
+            self._access_token.token = new_td.get("access_token")
+            self._refresh_token.token = new_td.get("refresh_token")
+            self._write_tokens_file(new_td)
             color_print.info("Refresh and Access tokens updated")
         else:
             color_print.error("Could not get new refresh and access tokens, check these:\n    1. App status is "
@@ -250,20 +255,18 @@ class Client:
             return None
         return requests.post('https://api.schwabapi.com/v1/oauth/token', headers=headers, data=data)
 
-    def _write_tokens_file(self, atIssued, rtIssued, tokenDictionary):
+    def _write_tokens_file(self, tokenDictionary):
         """
         Writes token file
-        :param atIssued: access token issued
-        :type atIssued: datetime
-        :param rtIssued: refresh token issued
-        :type rtIssued: datetime
         :param tokenDictionary: token dictionary
         :type tokenDictionary: dict
         """
         try:
             with open(self._tokens_file, 'w') as f:
-                toWrite = {"access_token_issued": atIssued.isoformat(), "refresh_token_issued": rtIssued.isoformat(),
-                           "token_dictionary": tokenDictionary}
+                toWrite = {
+                    "access_token_issued": self._access_token.issued.isoformat(),
+                    "refresh_token_issued": self._refresh_token.issued.isoformat(),
+                    "token_dictionary": tokenDictionary}
                 json.dump(toWrite, f, ensure_ascii=False, indent=4)
                 f.flush()
         except Exception as e:
@@ -273,16 +276,25 @@ class Client:
     def _read_tokens_file(self):
         """
         Reads token file
-        :return: access token issued, refresh token issued, token dictionary
-        :rtype: datetime, datetime, dict
+        :return: token dictionary
+        :rtype: dict
         """
         try:
             with open(self._tokens_file, 'r') as f:
                 d = json.load(f)
-                return datetime.fromisoformat(d.get("access_token_issued")), datetime.fromisoformat(d.get("refresh_token_issued")), d.get("token_dictionary")
+            token_dictionary = d.get("token_dictionary")
+            # update the timeout in case schwab decides to change it
+            self._access_token.timeout = token_dictionary.get("expires_in", self._access_token.timeout)
+            self._access_token.token = token_dictionary.get("access_token")
+            self._access_token.issued = datetime.fromisoformat(d.get("access_token_issued"))
+            # any way we can tell a new refresh token timeout?
+            self._refresh_token.token = token_dictionary.get("refresh_token")
+            self._refresh_token.issued = datetime.fromisoformat(d.get("refresh_token_issued"))
+            self.id_token = token_dictionary.get("id_token")
+            return token_dictionary
         except Exception as e:
             color_print.error(e)
-            return None, None, None
+            return None
 
     def _params_parser(self, params):
         """
