@@ -24,7 +24,7 @@ class Client:
         self._verbose = verbose             # verbose mode
         self.stream = Stream(self)          # init the streaming object
         self.timeout = timeout
-        self._tokens = Tokens(*a, auto_refresh=auto_refresh, **ka)
+        self._tokens = Tokens(*a, verbose=verbose, auto_refresh=auto_refresh, **ka)
 
         # reflect some methods of Tokens class
         self.update_tokens = self._tokens.update_tokens

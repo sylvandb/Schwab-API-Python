@@ -96,7 +96,7 @@ class Tokens:
             # show user when tokens were last updated and when they will expire
             if self._verbose:
                 color_print.info(self._access_token.issued.strftime(
-                    "Access token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self._access_token.expires)} seconds)")
+                    "Access  token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self._access_token.expires)} seconds)")
                 color_print.info(self._refresh_token.issued.strftime(
                     "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self._refresh_token.expires/86400:0.2f} days)")
 
@@ -137,13 +137,16 @@ class Tokens:
         """
         # check if we need to update refresh (and access) token - if less than 1s before expiration
         rte = self._refresh_token.expires
-        if self._auto_refresh and rte < 1:
-            for i in range(3):  color_print.user("The refresh token has expired, please update!")
-            self.acquire_refresh_token()
+        rtem = ''
+        if rte < 1:
+            rtem = "The refresh token has expired, "
+            for i in range(3):  color_print.user(f"{rtem}please update!")
+            if self._auto_refresh:
+                self.acquire_refresh_token()
         # check if we need to update access (and refresh?) token - if less than 60s before expiration
-        elif rte < self._token_usable or self._access_token.expires < self._token_usable:
+        if self._access_token.expires < self._token_usable:
             if self._verbose:
-                color_print.info("The access token has expired, updating automatically.")
+                color_print.info(f"The access token has expired, {rtem}updating automatically.")
             self._update_access_token()
         # else: color_print.info("Token check passed")
 
