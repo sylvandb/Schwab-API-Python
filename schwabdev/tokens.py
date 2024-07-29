@@ -1,16 +1,22 @@
 """ token management for schwab client API """
-import json
+from datetime import datetime
 import base64
+import json
+try:
+    from lockfile import LockFile
+except ImportError:
+    LockFile = None
 import requests
 from sys import stdin
 import threading
 import time
 from . import color_print
-from datetime import datetime
 
 
 
-class TokenUpdateError(Exception): pass
+class TokenError(Exception): pass
+class TokenExpiryError(TokenError): pass
+class TokenUpdateError(TokenError): pass
 
 
 
@@ -32,11 +38,27 @@ class Token:
 
     @property
     def expires(self):
-        # return seconds until expiration, lifetime - age
+        # return seconds until expiration: lifetime - age
         try:
             return self.lifetime - (datetime.now() - self.issued).total_seconds()
         except TypeError:
             return 0
+
+
+
+# locking wrapper assumes use inside Tokens class
+if LockFile:
+    def DoLocked(func):
+        def _wrapper(self, *a, **ka):
+            with self._lock:
+                if self._tokens_unchanged():
+                    func(self, *a, **ka)
+        return _wrapper
+else:
+    def DoLocked(func):
+        def _wrapper(*a, **ka):
+            func(*a, **ka)
+        return _wrapper
 
 
 
@@ -81,6 +103,7 @@ class Tokens:
         self._token_usable = 60             # minimum seconds to consider token usable
         self._auto_refresh = auto_refresh   # automatically attempt to acquire a refresh token
         self._tokens_file = tokens_file     # path to tokens file
+        self._lock = LockFile(tokens_file) if LockFile else None
         self._verbose = verbose             # verbose mode
         self._webbrowser = webbrowser       # okay to open a webbrowser
 
@@ -148,6 +171,7 @@ class Tokens:
             self._update_access_token()
 
 
+    @DoLocked
     def acquire_refresh_token(self):
         """
         Get new access and refresh tokens using authorization code.
@@ -184,6 +208,7 @@ class Tokens:
             raise TokenUpdateError("Could not acquire refresh token.")
 
 
+    @DoLocked
     def _update_access_token(self):
         """
         "refresh" the access token using the refresh token
@@ -228,8 +253,21 @@ class Tokens:
             data = {'grant_type': 'refresh_token', 'refresh_token': code}
         else:
             color_print.error("Invalid grant type")
-            return None
+            raise TokenUpdateError("Invalid grant type")
         return requests.post('https://api.schwabapi.com/v1/oauth/token', headers=headers, data=data)
+
+
+    def _tokens_unchanged(self):
+        access_token = self._access_token.token
+        refresh_token = self._refresh_token.token
+        try:
+            self._read_tokens_file()
+        except:
+            return True
+        return (
+            access_token == self._access_token.token and
+            refresh_token == self._refresh_token.token
+        )
 
 
     def _write_tokens_file(self, tokenDictionary):
