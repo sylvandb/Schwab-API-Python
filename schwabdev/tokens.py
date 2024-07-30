@@ -133,22 +133,19 @@ class Tokens:
 
     def update_tokens(self):
         """
-        Checks if tokens need to be updated and updates if needed (only access token is automatically updated)
+        Checks if tokens need to be updated and updates if needed
         """
-        # check if we need to update refresh (and access) token - if less than 1s before expiration
-        rte = self._refresh_token.expires
-        rtem = ''
-        if rte < 1:
-            rtem = "The refresh token has expired, "
-            for i in range(3):  color_print.user(f"{rtem}please update!")
+        # check if refresh token expires soon - if less than 1s before expiration
+        rtem = "The refresh token has expired" if self._refresh_token.expires < 1 else ''
+        if rtem:
+            for i in range(3):  color_print.user(f"{rtem}, please update!")
             if self._auto_refresh:
                 self.acquire_refresh_token()
-        # check if we need to update access (and refresh?) token - if less than 60s before expiration
+        # check if access token expires soon - if less than usable seconds before expiration
         if self._access_token.expires < self._token_usable:
             if self._verbose:
-                color_print.info(f"The access token has expired, {rtem}updating automatically.")
+                color_print.info(f"Automatic token update: The access token has expired{'. ' if rtem else ''}{rtem}.")
             self._update_access_token()
-        # else: color_print.info("Token check passed")
 
 
     def acquire_refresh_token(self):
