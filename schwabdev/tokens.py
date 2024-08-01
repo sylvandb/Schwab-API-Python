@@ -97,8 +97,8 @@ class Tokens:
         self._app_key = app_key
         self._app_secret = app_secret
         self._callback_url = callback_url
-        self._access_token = Token(1800)       # in seconds (from schwab)
-        self._refresh_token = Token(7 * 86400) # days (from schwab) to seconds
+        self._access_token = Token(1800)        # in seconds (from schwab)
+        self._refresh_token = Token(12 * 86400) # days (experimental, schwab says 7) to seconds
         self._token_thread = None
         self._token_usable = 60             # minimum seconds to consider token usable
         self._auto_refresh = auto_refresh   # automatically attempt to acquire a refresh token
