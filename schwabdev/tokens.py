@@ -18,12 +18,132 @@ class TokenError(Exception): pass
 class TokenExpiryError(TokenError): pass
 class TokenUpdateError(TokenError): pass
 
+ACCESS_LIFE_SECONDS = 1800 # access token lifetime in seconds (from schwab, updated each refresh)
+REFRESH_LIFE_DAYS   =   11 # refresh token lifetime in days (experimental, schwab says 7)
+# 11 days gives time for "has expired" warnings to be noticed
+# seems to work more than 12 days, sometimes less than 13, sometimes more
+# example:
+# $ ./schwab.py --check-token
+# [INFO]: Access  token last updated: 2024-08-24 11:06:28 (expires in -2239 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -1.08 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-24 12:13:48.268531 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-27 08:38:12 (expires in -1160 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -3.96 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-27 09:27:33.434023 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-27 09:27:33 (expires in -2745 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -4.01 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-27 10:43:20.127538 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-27 13:35:19 (expires in -935 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -4.17 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-27 14:20:54.934456 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-27 17:20:03 (expires in -7872 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -4.40 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-27 20:01:16.003297 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-28 09:00:52 (expires in -4305 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -5.01 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-28 10:42:38.411130 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-28 13:17:47 (expires in -3195 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -5.18 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-28 14:41:03.445911 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-29 07:56:03 (expires in -2337 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -5.95 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-29 09:05:01.479591 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-29 09:05:01 (expires in -8161 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -6.06 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [INFO]: Access token updated: 2024-08-29 11:51:03.096857 for 1800 seconds
+# $     [ time passes ]
+# $ ./schwab.py --check-tokens
+# [INFO]: Access  token last updated: 2024-08-29 11:51:03 (expires in -5587 seconds)
+# [INFO]: Refresh token last updated: 2024-08-12 10:22:07 (expires in -6.15 days)
+# [INFO]: Initialization Complete
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [USER]: The refresh token has expired, please update!
+# [INFO]: Automatic token update: The access token has expired. The refresh token has expired.
+# [ERROR]: Could not get new access token (1 of 3).
+# [ERROR]: Could not get new access token (2 of 3).
+# [ERROR]: Could not get new access token (3 of 3).
+# summary:
+#   prior success:  2024-08-29 11:51:03
+#   renew failed:   2024-08-29 13:54:10
+#   refresh token worked:
+#     thru:  2024-08-29 11:51:03
+#     from:  2024-08-12 10:22:07
+#     duration from: 17  1:29
+#     but less than: 17  3:32
+# and then on 7Oct, after all Sep on just two refresh tokens, the new one expired after exactly 7 days :facepalm:
+
 
 
 class Token:
 
-    def __init__(self, lifetime):
-        self.lifetime = lifetime
+    def __init__(self, lifeseconds=0, lifedays=0):
+        self.lifetime = lifeseconds
+        if lifedays:
+            self.lifetime += lifedays * 86400
+        if not self.lifetime:
+            raise ValueError("lifeseconds or lifedays must be more than zero")
         self.issued = None
         self._token = None
 
@@ -97,8 +217,8 @@ class Tokens:
         self._app_key = app_key
         self._app_secret = app_secret
         self._callback_url = callback_url
-        self._access_token = Token(1800)        # in seconds (from schwab)
-        self._refresh_token = Token(12 * 86400) # days (experimental, schwab says 7) to seconds
+        self._access_token = Token(lifeseconds=ACCESS_LIFE_SECONDS)
+        self._refresh_token = Token(lifedays=REFRESH_LIFE_DAYS)
         self._token_thread = None
         self._token_usable = 60             # minimum seconds to consider token usable
         self._auto_refresh = auto_refresh   # automatically attempt to acquire a refresh token
@@ -130,7 +250,10 @@ class Tokens:
 
     @property
     def token_expires(self):
-        return self._refresh_token.expires
+        return max(
+            self._refresh_token.expires,
+            self._access_token.expires
+        )
 
 
     def update_tokens_auto(self):
