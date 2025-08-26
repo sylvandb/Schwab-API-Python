@@ -214,7 +214,7 @@ class Tokens:
 
         if callback_url is None or tokens_file is None:
             raise Exception("callback_url and tokens_file cannot be None.")
-        elif len(app_key) != 32 or len(app_secret) != 16:
+        elif len(app_key) not in (32, 48) or len(app_secret) not in (16, 64):
             raise Exception(f"Invalid length App key({len(app_key)}) or app secret({len(app_secret)}).")
 
         self._app_key = app_key
