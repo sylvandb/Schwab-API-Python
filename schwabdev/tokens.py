@@ -19,9 +19,10 @@ class TokenExpiryError(TokenError): pass
 class TokenUpdateError(TokenError): pass
 
 ACCESS_LIFE_SECONDS = 1800 # access token lifetime in seconds (from schwab, updated each refresh)
-REFRESH_LIFE_DAYS   =   11 # refresh token lifetime in days (experimental, schwab says 7)
+REFRESH_LIFE_DAYS   =    9 # refresh token lifetime in days (experimental, schwab says 7)
+# notes, oldest first:
+# 20240810 the refresh token seems to work more than 12 days, sometimes less than 13, sometimes more
 # 11 days gives time for "has expired" warnings to be noticed
-# seems to work more than 12 days, sometimes less than 13, sometimes more
 # example:
 # $ ./schwab.py --check-token
 # [INFO]: Access  token last updated: 2024-08-24 11:06:28 (expires in -2239 seconds)
@@ -132,7 +133,9 @@ REFRESH_LIFE_DAYS   =   11 # refresh token lifetime in days (experimental, schwa
 #     from:  2024-08-12 10:22:07
 #     duration from: 17  1:29
 #     but less than: 17  3:32
-# and then on 7Oct, after all Sep on just two refresh tokens, the new one expired after exactly 7 days :facepalm:
+# 20241007 and then, after all Sep on just two refresh tokens, the new one expired after exactly 7 days :facepalm:
+# 20241115 twice since sep has expired less than 10 days
+# 20250825 lately most (not all) weeks the refresh token expires before day 8
 
 
 
@@ -220,7 +223,8 @@ class Tokens:
         self._access_token = Token(lifeseconds=ACCESS_LIFE_SECONDS)
         self._refresh_token = Token(lifedays=REFRESH_LIFE_DAYS)
         self._token_thread = None
-        self._token_usable = 60             # minimum seconds to consider token usable
+        self._access_usable  = 60           # minimum seconds to consider access token usable
+        self._refresh_usable =  2           # minimum seconds to consider refresh (auth) token usable
         self._auto_refresh = auto_refresh   # automatically attempt to acquire a refresh token
         self._tokens_file = tokens_file     # path to tokens file
         self._lock = LockFile(tokens_file) if LockFile else None
@@ -238,10 +242,12 @@ class Tokens:
         else:
             # show user when tokens were last updated and when they will expire
             if self._verbose:
-                color_print.info(self._access_token.issued.strftime(
-                    "Access  token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {int(self._access_token.expires)} seconds)")
-                color_print.info(self._refresh_token.issued.strftime(
-                    "Refresh token last updated: %Y-%m-%d %H:%M:%S") + f" (expires in {self._refresh_token.expires/86400:0.2f} days)")
+                color_print.info(
+                    f"Access  token last updated: {self._access_token.issued.strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"(expires in {int(self._access_token.expires)}/{self._access_token.lifetime} seconds)")
+                color_print.info(
+                    f"Refresh token last updated: {self._refresh_token.issued.strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"(expires in {self._refresh_token.expires/86400:0.2f}/{self._refresh_token.lifetime//86400} days)")
 
 
     @property
@@ -271,7 +277,7 @@ class Tokens:
                 except Exception as e:
                     color_print.error(f"Error during update_tokens: {e}")
                 first.set()
-                time.sleep(self._token_usable)
+                time.sleep(self._access_usable)
         self._token_thread = threading.Thread(target=checker, daemon=True)
         self._token_thread.start()
         first.wait()
@@ -282,13 +288,13 @@ class Tokens:
         Checks if tokens need to be updated and updates if needed
         """
         # check if refresh token expires soon - if less than 1s before expiration
-        rtem = "The refresh token has expired" if self._refresh_token.expires < 1 else ''
+        rtem = "The refresh token has expired" if self._refresh_token.expires < self._refresh_usable else ''
         if rtem:
             for i in range(3):  color_print.user(f"{rtem}, please update!")
             if self._auto_refresh:
                 self.acquire_refresh_token()
         # check if access token expires soon - if less than usable seconds before expiration
-        if self._access_token.expires < self._token_usable:
+        if self._access_token.expires < self._access_usable:
             if self._verbose:
                 color_print.info(f"Automatic token update: The access token has expired{'. ' if rtem else ''}{rtem}.")
             self._update_access_token()
