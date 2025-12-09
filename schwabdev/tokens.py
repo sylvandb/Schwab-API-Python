@@ -136,6 +136,7 @@ REFRESH_LIFE_DAYS   =    9 # refresh token lifetime in days (experimental, schwa
 # 20241007 and then, after all Sep on just two refresh tokens, the new one expired after exactly 7 days :facepalm:
 # 20241115 twice since sep has expired less than 10 days
 # 20250825 lately most (not all) weeks the refresh token expires before day 8
+# 20251209 almost always now the refresh token expires before day 8
 
 
 
@@ -149,6 +150,10 @@ class Token:
             raise ValueError("lifeseconds or lifedays must be more than zero")
         self.issued = None
         self._token = None
+        self.expired = False
+
+    def expire(self):
+        self.expired = datetime.now()
 
     @property
     def token(self):
@@ -157,6 +162,7 @@ class Token:
     @token.setter
     def token(self, value):
         self.issued = datetime.now()
+        self.expired = False
         self._token = value
 
     @property
@@ -166,6 +172,23 @@ class Token:
             return self.lifetime - (datetime.now() - self.issued).total_seconds()
         except TypeError:
             return 0
+
+    def to_json_strs_dict(self):
+        return {
+            'token': self.token,
+            'lifetime': self.lifetime,
+            'issued': self.issued.isoformat(),
+            'expired': self.expired.isoformat() if self.expired else False,
+        }
+
+    def from_json_strs(self, token, issued, lifetime=None, expired=None):
+        self.token = token
+        # token setter changes other fields...
+        self.issued = datetime.fromisoformat(issued)
+        if expired:
+            self.expired = datetime.fromisoformat(expired)
+        if lifetime is not None:
+            self.lifetime = lifetime
 
 
 
@@ -287,9 +310,11 @@ class Tokens:
         """
         Checks if tokens need to be updated and updates if needed
         """
+        rtem = ''
         # check if refresh token expires soon - if less than 1s before expiration
-        rtem = "The refresh token has expired" if self._refresh_token.expires < self._refresh_usable else ''
-        if rtem:
+        if self._refresh_token.expired or self._refresh_token.expires < self._refresh_usable:
+            rtem = "The refresh token has expired"
+            self._refresh_token.expire()
             for i in range(3):  color_print.user(f"{rtem}, please update!")
             if self._auto_refresh:
                 self.acquire_refresh_token()
@@ -365,7 +390,14 @@ class Tokens:
                 color_print.error(f"Could not get new access token ({i+1} of 3).")
                 time.sleep(i ** 2)
         else:
+            self._expire_refresh_token()
             raise TokenUpdateError("Could not get new access token.")
+
+
+    def _expire_refresh_token(self):
+        self._refresh_token.expire()
+        d = self._read_tokens_json()
+        self._write_tokens_file(d.get("token_dictionary"))
 
 
     def _post_oauth_token(self, grant_type, code):
@@ -405,12 +437,16 @@ class Tokens:
         :param tokenDictionary: token dictionary
         :type tokenDictionary: dict
         """
+        at = self._access_token.to_json_strs_dict()
+        rt = self._refresh_token.to_json_strs_dict()
+        toWrite = {
+            "access_token_issued": at['issued'],
+            "refresh_token_issued": rt['issued'],
+            "refresh_token_expired": rt['expired'],
+            "token_dictionary": tokenDictionary
+        }
         try:
             with open(self._tokens_file, 'w') as f:
-                toWrite = {
-                    "access_token_issued": self._access_token.issued.isoformat(),
-                    "refresh_token_issued": self._refresh_token.issued.isoformat(),
-                    "token_dictionary": tokenDictionary}
                 json.dump(toWrite, f, ensure_ascii=False, indent=4)
                 f.flush()
         except Exception as e:
@@ -418,21 +454,38 @@ class Tokens:
             # continue on as normal
 
 
-    def _read_tokens_file(self):
+    def _read_tokens_json(self):
         """
-        Reads token file
+        Reads token file as json
         """
         try:
             with open(self._tokens_file, 'r') as f:
                 d = json.load(f)
+        except Exception as e:
+            color_print.error(e)
+            raise
+        return d
+
+
+    def _read_tokens_file(self):
+        """
+        Reads token file into existing local token objects
+        """
+        d = self._read_tokens_json()
+        try:
             token_dictionary = d.get("token_dictionary")
             # update the lifetime in case schwab decides to change it
-            self._access_token.lifetime = token_dictionary.get("expires_in", self._access_token.lifetime)
-            self._access_token.token = token_dictionary.get("access_token")
-            self._access_token.issued = datetime.fromisoformat(d.get("access_token_issued"))
+            self._access_token.from_json_strs(
+                token = token_dictionary.get("access_token"),
+                issued = d.get("access_token_issued"),
+                lifetime = token_dictionary.get("expires_in", self._access_token.lifetime),
+            )
             # any way we can tell a new refresh token lifetime?
-            self._refresh_token.token = token_dictionary.get("refresh_token")
-            self._refresh_token.issued = datetime.fromisoformat(d.get("refresh_token_issued"))
+            self._refresh_token.from_json_strs(
+                token = token_dictionary.get("refresh_token"),
+                issued = d.get("refresh_token_issued"),
+                expired = d.get('refresh_token_expired'),
+            )
             self.id_token = token_dictionary.get("id_token")
         except Exception as e:
             color_print.error(e)
