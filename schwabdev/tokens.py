@@ -337,14 +337,20 @@ class Tokens:
         # get authorization code (requires user to authorize)
         color_print.user("Please authorize this program to access your schwab account.")
         auth_url = f'https://api.schwabapi.com/v1/oauth/authorize?client_id={self._app_key}&redirect_uri={self._callback_url}'
-        color_print.user(f"Click to authenticate: {auth_url}")
+        color_print.user(f"Click to authenticate:\n  {auth_url}")
         if self._webbrowser:
             import webbrowser
             color_print.user("Opening browser...")
             webbrowser.open(auth_url)
-        response_url = color_print.user_input(
-            "After authorizing, wait for it to load (<1min) and paste the WHOLE url here: ")
-        code = f"{response_url[response_url.index('code=') + 5:response_url.index('%40')]}@"  # session = responseURL[responseURL.index("session=")+8:]
+        prompt = "After authorizing, wait for it to load (<1min) and paste the ENTIRE url here:\n  "
+        response_url = color_print.user_input(prompt)
+        while not response_url or \
+            not response_url.startswith(self._callback_url) or \
+            'code=' not in response_url or \
+            '%40' not in response_url:
+            color_print.error(f"Response not recognized ({len(response_url)} characters doesn't contain expected keywords)")
+            response_url = color_print.user_input(prompt)
+        code = f"{response_url[response_url.index('code=') + 5:response_url.index('%40')]}@"
         # get new access and refresh tokens
         response = self._post_oauth_token('authorization_code', code)
         if response.ok:
