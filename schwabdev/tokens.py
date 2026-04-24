@@ -19,7 +19,7 @@ class TokenExpiryError(TokenError): pass
 class TokenUpdateError(TokenError): pass
 
 ACCESS_LIFE_SECONDS = 1800 # access token lifetime in seconds (from schwab, updated each refresh)
-REFRESH_LIFE_DAYS   =    9 # refresh token lifetime in days (experimental, schwab says 7)
+REFRESH_LIFE_DAYS   =    7 # refresh token lifetime in days (schwab says 7, used to last longer)
 # notes, oldest first:
 # 20240810 the refresh token seems to work more than 12 days, sometimes less than 13, sometimes more
 # 11 days gives time for "has expired" warnings to be noticed
@@ -153,7 +153,7 @@ class Token:
         self.expired = False
 
     def expire(self):
-        self.expired = datetime.now()
+        self.expired = self.expired or datetime.now()
 
     @property
     def token(self):
@@ -167,11 +167,14 @@ class Token:
 
     @property
     def expires(self):
-        # return seconds until expiration: lifetime - age
+        # return remaining lifetime in seconds (may be negative): lifetime - age
         try:
-            return self.lifetime - (datetime.now() - self.issued).total_seconds()
+            rem = self.lifetime - (datetime.now() - self.issued).total_seconds()
         except TypeError:
-            return 0
+            rem = float('-inf')
+        if rem <= 0:
+            self.expire()
+        return rem
 
     def to_json_strs_dict(self):
         return {
@@ -245,6 +248,8 @@ class Tokens:
         self._callback_url = callback_url
         self._access_token = Token(lifeseconds=ACCESS_LIFE_SECONDS)
         self._refresh_token = Token(lifedays=REFRESH_LIFE_DAYS)
+        # sometimes refresh token works longer - only try one time for a few days more
+        self._refresh_extra = 2 * 86400 # extra seconds to try
         self._token_thread = None
         self._access_usable  = 60           # minimum seconds to consider access token usable
         self._refresh_usable =  2           # minimum seconds to consider refresh (auth) token usable
@@ -268,9 +273,15 @@ class Tokens:
                 color_print.info(
                     f"Access  token last updated: {self._access_token.issued.strftime('%Y-%m-%d %H:%M:%S')} "
                     f"(expires in {int(self._access_token.expires)}/{self._access_token.lifetime} seconds)")
+                expir = self._refresh_token.expires / 86400
+                if 0.7 < abs(expir):
+                    units = '/'
+                else:
+                    units = ' hours / '
+                    expir = self._refresh_token.expires / 3600
                 color_print.info(
                     f"Refresh token last updated: {self._refresh_token.issued.strftime('%Y-%m-%d %H:%M:%S')} "
-                    f"(expires in {self._refresh_token.expires/86400:0.2f}/{self._refresh_token.lifetime//86400} days)")
+                    f"(expires in {expir:0.1f}{units}{self._refresh_token.lifetime // 86400} days)")
 
 
     @property
@@ -311,10 +322,9 @@ class Tokens:
         Checks if tokens need to be updated and updates if needed
         """
         rtem = ''
-        # check if refresh token expires soon - if less than 1s before expiration
+        # check if refresh token expires soon - if less than usable seconds before expiration
         if self._refresh_token.expired or self._refresh_token.expires < self._refresh_usable:
             rtem = "The refresh token has expired"
-            self._refresh_token.expire()
             for i in range(3):  color_print.user(f"{rtem}, please update!")
             if self._auto_refresh:
                 self.acquire_refresh_token()
@@ -374,17 +384,23 @@ class Tokens:
         "refresh" the access token using the refresh token
         """
         # get new tokens
-        for i in range(3):
+        tries = 3
+        # if already expired or expiring now
+        if self._refresh_token.expired or self._refresh_token.expires < 1:
+            tries = 1 if self._refresh_token.expires + self._refresh_extra > 0 else 0
+        for i in range(tries):
             response = self._post_oauth_token('refresh_token', self._refresh_token.token)
             if response.ok:
                 # get and update to the new access token
                 new_td = response.json()
                 self.id_token = new_td.get("id_token")
                 self._access_token.token = new_td.get("access_token")
+                # vvv almost certainly will not happen
                 refresh_token = new_td.get("refresh_token")
                 if refresh_token and refresh_token != self._refresh_token.token:
                     self._refresh_token.token = refresh_token
                     color_print.info(f"Refresh token updated: {self._refresh_token.issued}")
+                # ^^^ almost certainly will not happen
                 self._write_tokens_file(new_td)
                 # update the lifetime in case schwab decides to change it
                 self._access_token.lifetime = new_td.get("expires_in", self._access_token.lifetime)
@@ -393,7 +409,7 @@ class Tokens:
                     color_print.info(f"Access token updated: {self._access_token.issued} for {self._access_token.lifetime} seconds")
                 break
             else:
-                color_print.error(f"Could not get new access token ({i+1} of 3).")
+                color_print.error(f"Could not get new access token ({i+1} of {tries}).")
                 time.sleep(i ** 2)
         else:
             self._expire_refresh_token()
